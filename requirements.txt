@@ -1,0 +1,6 @@
+# Voice AI Assistant - Vocode Edition
+# Python 3.10+
+
+vocode[io]
+python-dotenv
+pydantic-settings
