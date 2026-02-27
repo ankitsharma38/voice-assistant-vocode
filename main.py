@@ -47,7 +47,8 @@ class Settings(BaseSettings):
     openai_api_key: str
     deepgram_api_key: str
     eleven_labs_api_key: str
-    elevenlabs_voice_id: str = "21m00Tcm4TlvDq8ikWAM"  # Rachel
+    # elevenlabs_voice_id: str = "21m00Tcm4TlvDq8ikWAM"  # Rachel
+    elevenlabs_voice_id: str = "TxGEqnHWrfWFTfGW9XjX"  # Antoni
     openai_model: str = "gpt-4o-mini"
 
     model_config = SettingsConfigDict(
@@ -70,10 +71,11 @@ SYSTEM_PROMPT = """You are a friendly, warm, intelligent AI voice assistant.
 
 class NaturalElevenLabsSynthesizer(ElevenLabsSynthesizer):
     """
-    Full override of get_chunks to:
-    1. Force pcm_22050 (free tier compatible)
+    Overrides get_chunks and create_speech_uncached to:
+    1. Force pcm_22050 (free tier compatible — pcm_44100 requires Pro)
     2. Inject full voice_settings including style + use_speaker_boost
-       which Vocode's default implementation does NOT send
+       which Vocode's default implementation does NOT pass to ElevenLabs
+    3. Use 22050Hz sample rate end-to-end (mic, speaker, TTS all match)
     """
 
     async def get_chunks(
@@ -84,22 +86,19 @@ class NaturalElevenLabsSynthesizer(ElevenLabsSynthesizer):
         chunk_size: int,
         chunk_queue: asyncio.Queue,
     ):
-        # Force free-tier format
+        # Force free-tier format in URL
         url = url.replace("pcm_44100", "pcm_22050")
         url = url.replace("pcm_24000", "pcm_22050")
 
-        # Override voice_settings with full natural parameters
-        # stability (0.5): 0.5 is the ideal balance for natural but consistent speech
-        # similarity_boost (0.8): higher = clearer original voice
-        # style (0.3): adds subtle expressive style
+        # Inject full voice_settings — Vocode only sends stability+similarity_boost
+        # style and use_speaker_boost are what make the voice natural vs robotic
         body["voice_settings"] = {
-            "stability": 0.50,
-            "similarity_boost": 0.80,
-            "style": 0.35,
-            "use_speaker_boost": True,
+            "stability": 0.50,           # 0.3-0.5 = expressive, 0.7+ = robotic/monotone
+            "similarity_boost": 0.80,    # 0.7-0.85 = natural, faithful to voice
+            "style": 0.35,               # 0.2-0.4 = subtle natural expression
+            "use_speaker_boost": True,   # Clearer, more present voice
         }
 
-        # Call parent get_chunks with patched url and body
         await super().get_chunks(url, headers, body, chunk_size, chunk_queue)
 
     async def create_speech_uncached(
@@ -109,9 +108,10 @@ class NaturalElevenLabsSynthesizer(ElevenLabsSynthesizer):
         is_first_text_chunk: bool = False,
         is_sole_text_chunk: bool = False,
     ) -> SynthesisResult:
-        # Force free tier sample rate
+        # Force free tier sample rate before URL is built
         self.output_format = "pcm_22050"
         self.sample_rate = 22050
+        self.upsample = None
         return await super().create_speech_uncached(
             message, chunk_size, is_first_text_chunk, is_sole_text_chunk
         )
@@ -128,14 +128,15 @@ async def main():
     print("═" * 60)
     print("  Speak naturally. Press Ctrl+C to exit.\n")
 
-    # Force 22050Hz globally to match ElevenLabs Free Tier
-    # Manual initialization bypasses helper limitations
-    microphone_input = MicrophoneInput.from_default_device(sampling_rate=22050)
-    speaker_output = BlockingSpeakerOutput.from_default_device(sampling_rate=22050)
+    # Use 22050Hz end-to-end — mic, speaker and ElevenLabs all match
+    # This was your key fix — bypasses the helper that defaults to 44100Hz
+    microphone_input  = MicrophoneInput.from_default_device(sampling_rate=22050)
+    speaker_output    = BlockingSpeakerOutput.from_default_device(sampling_rate=22050)
 
     conversation = StreamingConversation(
         output_device=speaker_output,
 
+        # ── STT: Deepgram ──────────────────────────────────────────────────
         transcriber=DeepgramTranscriber(
             DeepgramTranscriberConfig.from_input_device(
                 microphone_input,
@@ -144,6 +145,7 @@ async def main():
             ),
         ),
 
+        # ── LLM: OpenAI GPT ───────────────────────────────────────────────
         agent=ChatGPTAgent(
             ChatGPTAgentConfig(
                 openai_api_key=settings.openai_api_key,
@@ -153,15 +155,16 @@ async def main():
             )
         ),
 
+        # ── TTS: ElevenLabs ────────────────────────────────────────────────
         synthesizer=NaturalElevenLabsSynthesizer(
             ElevenLabsSynthesizerConfig.from_output_device(
                 speaker_output,
                 api_key=settings.eleven_labs_api_key,
                 voice_id=settings.elevenlabs_voice_id,
-                model_id="eleven_multilingual_v2",
-                stability=0.30,
-                similarity_boost=0.75,
-                optimize_streaming_latency=1,
+                model_id="eleven_multilingual_v2",  # Best quality model
+                stability=0.50,
+                similarity_boost=0.80,
+                optimize_streaming_latency=1,        # 1 = quality/latency balance
                 experimental_streaming=True,
             ),
         ),
