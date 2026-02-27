@@ -47,8 +47,7 @@ class Settings(BaseSettings):
     openai_api_key: str
     deepgram_api_key: str
     eleven_labs_api_key: str
-    # elevenlabs_voice_id: str = "21m00Tcm4TlvDq8ikWAM"  # Rachel
-    elevenlabs_voice_id: str = "TxGEqnHWrfWFTfGW9XjX"  # Antoni
+    elevenlabs_voice_id: str = "21m00Tcm4TlvDq8ikWAM"  # Rachel
     openai_model: str = "gpt-4o-mini"
 
     model_config = SettingsConfigDict(
