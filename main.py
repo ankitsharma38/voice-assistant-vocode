@@ -59,22 +59,23 @@ class Settings(BaseSettings):
 
 SYSTEM_PROMPT = """You are an AI voice assistant for Eco Tech Pest Control. You speak in a friendly, professional, and conversational tone — like a helpful human representative. 
 
+NATURAL SPEECH STYLE:
+- Use brief filler phrases occasionally like "Hmm," "Let me see," or "Got it" to sound more human while you're processing.
+- Start responses with social acknowledgments when appropriate, like "Oh, I see," "Sure thing," or "I'd be happy to help with that."
+- Speak in complete, natural sentences. Keep it short (1-2 sentences).
+- Never use bullet points, symbols, or markdown.
+
 CORE RULES:
 - Ask only ONE question at a time. Wait for the caller's response before moving on.
 - Never repeat information the caller has already given.
-- Keep responses to 1–2 sentences max. Keep it natural for spoken audio.
-- Never use bullet points, symbols, or markdown.
 - Stay on pest control topics only. If unrelated, say: "I'm sorry, I'm only able to help with pest control. Would you like me to connect you to a live agent?"
-- Always sound warm and natural — avoid robotic phrasing.
 
 ---
 
-LOOKUP DATA (Use this for verification):
-
+LOOKUP DATA:
 Account Database:
 - 555-867-5309 → Sarah Mitchell (Appt: March 15, 2025, 9 AM – 12 PM, General Pest Control)
 - 555-234-7890 → James Ortega (No upcoming appointments)
-- Other → Account not found
 
 Zip Codes Serviced: 90210, 30301. (73301 is NOT serviced).
 
@@ -86,7 +87,7 @@ Pricing:
 ---
 
 CONVERSATION FLOW:
-1. GREETING: State the greeting exactly as: "Thank you for calling Eco Tech Pest Control! Are you a current customer with us, or are you calling for the first time?"
+1. GREETING: "Thank you for calling Eco Tech Pest Control! Are you a current customer with us, or are you calling for the first time?"
 2. CURRENT CUSTOMER: Ask for phone number -> Look up in database.
 3. NEW CUSTOMER: Ask for zip code -> Check service area.
 4. COLLECT INFO: Get Name, Number, Pest type, and Square footage (One question at a time).
@@ -106,8 +107,7 @@ class NaturalElevenLabsSynthesizer(ElevenLabsSynthesizer):
     Overrides get_chunks and create_speech_uncached to:
     1. Force pcm_22050 (free tier compatible — pcm_44100 requires Pro)
     2. Inject full voice_settings including style + use_speaker_boost
-       which Vocode's default implementation does NOT pass to ElevenLabs
-    3. Use 22050Hz sample rate end-to-end (mic, speaker, TTS all match)
+    3. Use 22050Hz sample rate end-to-end
     """
 
     async def get_chunks(
@@ -123,12 +123,11 @@ class NaturalElevenLabsSynthesizer(ElevenLabsSynthesizer):
         url = url.replace("pcm_24000", "pcm_22050")
 
         # Inject full voice_settings — Vocode only sends stability+similarity_boost
-        # style and use_speaker_boost are what make the voice natural vs robotic
         body["voice_settings"] = {
-            "stability": 0.50,           # 0.3-0.5 = expressive, 0.7+ = robotic/monotone
-            "similarity_boost": 0.80,    # 0.7-0.85 = natural, faithful to voice
-            "style": 0.35,               # 0.2-0.4 = subtle natural expression
-            "use_speaker_boost": True,   # Clearer, more present voice
+            "stability": 0.50,
+            "similarity_boost": 0.80,
+            "style": 0.35,
+            "use_speaker_boost": True,
         }
 
         await super().get_chunks(url, headers, body, chunk_size, chunk_queue)
@@ -148,6 +147,29 @@ class NaturalElevenLabsSynthesizer(ElevenLabsSynthesizer):
             message, chunk_size, is_first_text_chunk, is_sole_text_chunk
         )
 
+    async def get_phrase_filler_audios(self) -> list:
+        """Synthesizes standard filler phrases (Hmm, Let me see...) on startup"""
+        from vocode.streaming.synthesizer.base_synthesizer import FILLER_PHRASES, FillerAudio
+        
+        filler_audios = []
+        # Generate first 3 (Hmm, Uh..., Let me see)
+        for phrase in FILLER_PHRASES[:3]:
+            res = await self.create_speech_uncached(phrase, 16384)
+            audio_data = b""
+            async for chunk_result in res.chunk_generator:
+                audio_data += chunk_result.chunk
+            
+            filler_audios.append(
+                FillerAudio(
+                    message=phrase,
+                    audio_data=audio_data,
+                    synthesizer_config=self.synthesizer_config,
+                    is_interruptible=True,
+                    seconds_per_chunk=1
+                )
+            )
+        return filler_audios
+
 
 # ── Main ───────────────────────────────────────────────────────────────────
 
@@ -155,7 +177,7 @@ async def main():
     settings = Settings()
 
     print("\n" + "═" * 60)
-    print("  🎙️  Voice AI Assistant  (Powered by Vocode)")
+    print("  🎙️  Voice AI Assistant  (Powered by Eco Tech)")
     print("  STT: Deepgram  |  LLM: GPT  |  TTS: ElevenLabs")
     print("═" * 60)
     print("  Speak naturally. Press Ctrl+C to exit.\n")
@@ -167,17 +189,15 @@ async def main():
 
     conversation = StreamingConversation(
         output_device=speaker_output,
-
-        # ── STT: Deepgram ──────────────────────────────────────────────────
         transcriber=DeepgramTranscriber(
             DeepgramTranscriberConfig.from_input_device(
                 microphone_input,
-                endpointing_config=PunctuationEndpointingConfig(),
+                endpointing_config=PunctuationEndpointingConfig(
+                    time_cutoff_seconds=0.8,  # SNAPPY: stops fast after you stop speaking
+                ),
                 api_key=settings.deepgram_api_key,
             ),
         ),
-
-        # ── LLM: OpenAI GPT ───────────────────────────────────────────────
         agent=ChatGPTAgent(
             ChatGPTAgentConfig(
                 openai_api_key=settings.openai_api_key,
@@ -185,22 +205,23 @@ async def main():
                 prompt_preamble=SYSTEM_PROMPT,
                 initial_message=BaseMessage(text=INITIAL_MESSAGE),
                 generate_responses=True,
+                send_filler_audio=True,  # Moved from conversation to agent config
             )
         ),
-
-        # ── TTS: ElevenLabs ────────────────────────────────────────────────
         synthesizer=NaturalElevenLabsSynthesizer(
             ElevenLabsSynthesizerConfig.from_output_device(
                 speaker_output,
                 api_key=settings.eleven_labs_api_key,
                 voice_id=settings.elevenlabs_voice_id,
-                model_id="eleven_multilingual_v2",  # Best quality model
+                model_id="eleven_multilingual_v2",
                 stability=0.50,
                 similarity_boost=0.80,
-                optimize_streaming_latency=1,        # 1 = quality/latency balance
+                optimize_streaming_latency=3,
                 experimental_streaming=True,
             ),
         ),
+        # ── Performance Tuning ─────────────────────────────────────────────
+        speed_coefficient=1.0,      # Fixed speed (prevents "rushing")
     )
 
     await conversation.start()
