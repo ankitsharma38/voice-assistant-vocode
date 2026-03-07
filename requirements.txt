@@ -1,9 +1,8 @@
-# API Server Dependencies (No Vocode - Direct API calls)
-fastapi==0.110.0
-uvicorn[standard]==0.29.0
-python-dotenv==1.0.1
-pydantic==2.6.4
-pydantic-settings==2.2.1
-aiohttp==3.9.5
-openai==1.14.3
-nltk==3.8.1
+fastapi
+uvicorn[standard]
+python-dotenv
+pydantic>=2.0
+pydantic-settings>=2.0
+aiohttp
+openai
+nltk
