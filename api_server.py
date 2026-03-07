@@ -403,16 +403,17 @@ async def voice_ws(websocket: WebSocket) -> None:
                 await websocket.send_text(json.dumps({"type": "ready"}))
                 try:
                     await websocket.send_text(json.dumps({"type": "response_start"}))
-                    await stream_tts_to_websocket(INITIAL_MESSAGE, websocket)
                     await websocket.send_text(
                         json.dumps({"type": "response_text", "text": INITIAL_MESSAGE})
                     )
+                    await stream_tts_to_websocket(INITIAL_MESSAGE, websocket)
                     await websocket.send_text(json.dumps({"type": "response_end"}))
                     session.messages.append(
                         {"role": "assistant", "content": INITIAL_MESSAGE}
                     )
-                except Exception:
+                except Exception as e:
                     logger.exception("Initial greeting error")
+                    await websocket.send_text(json.dumps({"type": "error", "message": f"Greeting failed: {str(e)}"}))
 
                 # ── Main receive loop ───────────────────────────────────────
                 while session.active:
