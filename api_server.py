@@ -477,6 +477,19 @@ async def health():
     return {"status": "ok", "service": "Voice AI Tourist Guide"}
 
 
+@app.get("/debug", tags=["Utility"])
+async def debug():
+    """Debug endpoint to check if API keys are loaded."""
+    return {
+        "openai_key_set": bool(settings.openai_api_key),
+        "deepgram_key_set": bool(settings.deepgram_api_key),
+        "elevenlabs_key_set": bool(settings.eleven_labs_api_key),
+        "openai_key_prefix": settings.openai_api_key[:10] if settings.openai_api_key else None,
+        "model": settings.openai_model,
+        "voice_id": settings.elevenlabs_voice_id,
+    }
+
+
 @app.get("/config", tags=["Utility"])
 async def config():
     """
